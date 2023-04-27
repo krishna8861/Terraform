@@ -1,0 +1,250 @@
+Q- 01)
+
+#Provider
+provider "aws" {
+  region = "us-east-1"
+}
+
+# VPC Creation
+resource "aws_vpc" "example" {
+  cidr_block = "10.0.0.0/16"
+
+  tags = {
+    Name = "my-vpc"
+  }
+}
+
+# Public subnet creation
+resource "aws_subnet" "public" {
+  vpc_id     = aws_vpc.example.id
+  cidr_block = "10.0.1.0/24"
+
+  tags = {
+    Name = "my-public-subnet"
+  }
+}
+
+# Private subnet creation
+resource "aws_subnet" "private" {
+  vpc_id     = aws_vpc.example.id
+  cidr_block = "10.0.2.0/24"
+
+  tags = {
+    Name = "my-private-subnet"
+  }
+}
+
+# NAT gateway creation
+resource "aws_internet_gateway" "example" {
+  vpc_id = aws_vpc.example.id
+
+  tags = {
+    Name = "my-internet-gateway"
+  }
+}
+
+# Route table for the public subnet creation
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.example.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.example.id
+  }
+
+  tags = {
+    Name = "my-public-route-table"
+  }
+}
+
+# Associate the public subnet with the public route table
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+# Create a security group for the virtual machine
+resource "aws_security_group" "example" {
+  name_prefix = "my-security-group"
+  vpc_id      = aws_vpc.example.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "my-security-group"
+  }
+}
+
+# Create a virtual machine
+resource "aws_instance" "example" {
+  ami           = "ami-0c94855ba95c71c99"
+  instance_type = "t2.micro"
+  key_name      = "my-key-pair"
+  subnet_id     = aws_subnet.private.id
+  vpc_security_group_ids = [aws_security_group.example.id]
+
+  tags = {
+    Name = "my-virtual-machine"
+  }
+}
+
+# Create a NAT gateway and enable NATing for the private subnet
+resource "aws_nat_gateway" "example" {
+  allocation_id = aws_eip.example.id
+  subnet_id     = aws_subnet.public.id
+
+  tags = {
+    Name = "my-nat-gateway"
+  }
+}
+
+# Allocate an Elastic IP address for the NAT gateway
+resource "aws_eip" "example" {
+  vpc = true
+
+  tags = {
+    Name = "my-eip"
+  }
+}
+
+# Create a route table for the private subnet
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.example.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.example.id
+  }
+
+
+
+Q-2)
+
+# modules/vpc/main.tf
+variable "vpc_cidr_block" {}
+
+resource "aws_vpc" "this" {
+  cidr_block = var.vpc_cidr_block
+
+  tags = {
+    Name = "${var.name}-vpc"
+  }
+}
+
+# modules/subnets/main.tf
+variable "public_subnet_cidr_block" {}
+variable "private_subnet_cidr_block" {}
+
+resource "aws_subnet" "public" {
+  vpc_id     = var.vpc_id
+  cidr_block = var.public_subnet_cidr_block
+
+  tags = {
+    Name = "${var.name}-public-subnet"
+  }
+}
+
+resource "aws_subnet" "private" {
+  vpc_id     = var.vpc_id
+  cidr_block = var.private_subnet_cidr_block
+
+  tags = {
+    Name = "${var.name}-private-subnet"
+  }
+}
+
+# modules/nat/main.tf
+resource "aws_eip" "this" {
+  vpc = true
+
+  tags = {
+    Name = "${var.name}-eip"
+  }
+}
+
+resource "aws_nat_gateway" "this" {
+  allocation_id = aws_eip.this.id
+  subnet_id     = var.public_subnet_id
+
+  tags = {
+    Name = "${var.name}-nat-gateway"
+  }
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = var.vpc_id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.name}-private-route-table"
+  }
+}
+
+# modules/vm/main.tf
+variable "ami_id" {}
+variable "instance_type" {}
+
+resource "aws_instance" "this" {
+  ami           = var.ami_id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+  subnet_id     = var.private_subnet_id
+  vpc_security_group_ids = [var.security_group_id]
+
+  tags = {
+    Name = "${var.name}-vm"
+  }
+}
+
+# modules/vpc-nat-vm/main.tf
+module "vpc" {
+  source = "../vpc"
+
+  vpc_cidr_block = var.vpc_cidr_block
+  name           = var.name
+}
+
+module "subnets" {
+  source = "../subnets"
+
+  vpc_id                  = module.vpc.aws_vpc_this.id
+  public_subnet_cidr_block  = var.public_subnet_cidr_block
+  private_subnet_cidr_block = var.private_subnet_cidr_block
+  name                    = var.name
+}
+
+module "nat" {
+  source = "../nat"
+
+  public_subnet_id = module.subnets.aws_subnet_public.id
+  name             = var.name
+}
+
+module "vm" {
+  source = "../vm"
+
+  ami_id             = var.ami_id
+  instance_type      = var.instance_type
+  key_name           = var.key_name
+  private_subnet_id  = module.subnets.aws_subnet_private.id
+  security_group_id  = var.security_group_id
+  name               = var.name
+}
+
+# example/main.tf
+module "vpc-nat-vm" {
+  source = "./modules/vpc-nat-vm"
+
+  vpc_cidr_block         = "10.0.0.0/16"
+  public_subnet_cidr_block  = "10.0.1.0/24"
+  private_subnet_cidr_block = "10.0.2.0/24"
+  ami_id                 = "ami-0c94855ba95c71c
